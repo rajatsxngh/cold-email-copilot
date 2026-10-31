@@ -1,238 +1,243 @@
-# 🧊 Cold Email Copilot
+# Cold Email Copilot
 
-Paste a job description, upload your resume, and get a **personalized cold email to the recruiter** – with the recruiter’s email auto-fetched via Hunter and an option to send via Gmail/n8n.
+Upload your resume, paste a job description, and get a short, personal email to the recruiter — with their work email looked up for you and one click to send it from Gmail.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img alt="Cold Email Copilot: resume and job description on the left, how the resume matches the job below, and the finished email on the right" src="docs/screenshot.png">
+</picture>
 
-## 💼 Problem
-
-As an international master’s student in the US, applying to internships and jobs is **very time-consuming**:
-
-- You need to **personalize every message** to stand out.
-- You often have to **manually find recruiter emails** from LinkedIn/Hunter.
-- You’re juggling **coursework, projects, networking, and recruiting** at the same time.
-
-This makes consistent cold outreach hard, even though it’s one of the most important parts of getting interviews.
-
-**Cold Email Copilot** automates the boring parts:
-
-> **Paste JD + upload resume → get a recruiter-specific email ready in Gmail, with the correct email address filled in.**
+<sub>The person and company in the screenshot are made up.</sub>
 
 ---
 
-## ✨ What the app does
+## Contents
 
-1. **Upload your resume (PDF)**  
-2. **Paste the Job Description (JD)** into a textbox  
-3. **Enter recruiter name + company domain** (e.g., `natalya lowe`, `kiageorgia.com`)  
-4. Click **“Generate Cold Email”**
-
-Under the hood, the app:
-
-- Extracts text from your resume
-- Splits it into chunks and builds embeddings
-- Indexes chunks in a **Pinecone** vector database
-- Parses the JD using **OpenAI** (role, company, skills, etc.)
-- Searches Pinecone for the most relevant resume snippets and **reranks** them with a **CrossEncoder**
-- Calls **Hunter.io** with recruiter name + domain to find the recruiter email
-- Uses **OpenAI** again to generate a personalized:
-  - **Subject line**
-  - **Email body**
-
-On the UI you get:
-
-- Parsed JD summary (role, company, top skills)
-- Top matching resume snippets
-- Recruiter email (from Hunter)
-- Editable **subject** & **email body**
-- A **“Open this draft in Gmail”** link (pre-filled To + Subject + Body)
-- A **“Send via n8n”** button to actually send + log the email automatically
+- [Why I built this](#why-i-built-this)
+- [What it does](#what-it-does)
+- [How it works](#how-it-works)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Settings](#settings)
+- [Optional: send emails with n8n](#optional-send-emails-with-n8n)
+- [Running the tests](#running-the-tests)
+- [Project structure](#project-structure)
+- [Design choices](#design-choices)
+- [Limitations and ideas](#limitations-and-ideas)
 
 ---
 
-## 🧱 Tech Stack
+## Why I built this
 
-### Frontend / UI
+As an international master's student in the US, I found that applying for jobs takes a lot of time:
 
-- **[Gradio](https://www.gradio.app/)** – lightweight web UI:
-  - File upload for resume
-  - Textboxes for JD & recruiter info
-  - Buttons for “Generate”, “Send via n8n”, “Update Gmail link”
-  - Dark theme with dashboard-like layout
+- Every message needs to be **personal** to stand out.
+- Finding the **recruiter's email** means digging through LinkedIn and email-finder tools.
+- All of this happens on top of **classes, projects and networking**.
 
-### Backend (Python)
+Cold outreach is one of the best ways to get interviews, but it's hard to keep up. This app does the slow parts for you:
 
-Located in `src/`:
-
-- `app_gradio.py`
-  - Wires up all components into the Gradio app
-  - Handles the “Generate Cold Email” button
-  - Builds Gmail draft links
-  - Calls the n8n webhook (`send_via_n8n_handler`)
-
-- `pdf_utils.py`
-  - Extracts text from the uploaded resume PDF
-
-- `embeddings_index.py`
-  - Splits resume text into overlapping chunks
-  - Creates embeddings with `SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")`
-  - Stores vectors in **Pinecone**
-  - Retrieves the most relevant chunks for a JD
-  - **Reranks** them using `CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")`
-
-- `openai_email.py`
-  - `parse_jd`: uses OpenAI to parse the JD into structured info (role, company, skills, requirements)
-  - `generate_cold_email`: uses OpenAI to write a personalized subject + email body that:
-    - Matches the JD
-    - Uses the top resume snippets
-    - Mentions the recruiter by name if available
-
-- `hunter_client.py`
-  - Wraps the **Hunter.io Email Finder** API
-  - Uses recruiter name + company domain to find the best-matching email
-
-- `config.py`
-  - Sets up the **Pinecone** client and index (read this file to see exactly which env variables it expects)
-
-### External Services
-
-- **SentenceTransformers**
-  - `all-MiniLM-L6-v2` – dense embeddings for resume chunks / JD
-
-- **CrossEncoder**
-  - `ms-marco-MiniLM-L-6-v2` – reranks top Pinecone results using the JD + chunk pairs
-
-- **Pinecone**
-  - Vector database for storing resume chunks per user
-
-- **OpenAI API**
-  - JD parsing
-  - Cold email generation
-
-- **Hunter.io**
-  - Recruiter email lookup
-
-- **n8n**
-  - Webhook receiver
-  - Gmail integration (send email)
-  - Optional logging (Google Sheets / DB, etc.)
+> **Resume + job description → a tailored email in Gmail, addressed to the right person.**
 
 ---
 
-## 🧩 Project Structure
+## What it does
 
-```text
-cold_mail_copilot/
-├─ src/
-│  ├─ app_gradio.py        # Gradio UI + orchestration + n8n handler
-│  ├─ config.py            # Pinecone config/client
-│  ├─ embeddings_index.py  # chunking, embeddings, Pinecone, reranking
-│  ├─ hunter_client.py     # Hunter.io API wrapper
-│  ├─ openai_email.py      # JD parsing + cold email generation (OpenAI)
-│  ├─ pdf_utils.py         # PDF text extraction
-│  └─ __init__.py
-├─ requirements.txt
-├─ .gitignore
-└─ README.md
-```
-.env and venv/ are intentionally not committed (see .gitignore)
+1. **Reads your resume** (PDF) and the job description you paste in.
+2. **Pulls out the key details** of the job: role, company, location and top skills.
+3. **Finds the lines in your resume that fit the job best** and shows how strong each match is.
+4. **Looks up the recruiter's work email** with Hunter.io from their name and the company website.
+5. **Writes a 120–180 word email** that mentions the role, highlights 2–3 real things from your resume, and asks for a short call. It only uses experience that's actually in your resume.
+6. **Lets you edit and send**: change anything, copy it, open it in Gmail with everything filled in, or send it through an n8n workflow.
 
+---
 
-## ⚙️ Setup & Installation
+## How it works
 
+```mermaid
+flowchart LR
+    R[Resume PDF] --> X[Extract text]
+    X --> S[Split into sentences<br/>and bullet points]
+    S --> E[Embed each piece<br/>MiniLM-L6-v2]
+    E --> V[(Search<br/>Pinecone or in-memory)]
+    J[Job description] --> V
+    V --> K[Re-rank top 20<br/>cross-encoder]
+    J --> P[Pull out role, company,<br/>skills with OpenAI]
+    K --> W[Write the email<br/>with OpenAI]
+    P --> W
+    N[Recruiter name +<br/>company website] --> H[Find email<br/>Hunter.io]
+    W --> A[Review and edit<br/>in the app]
+    H --> A
+    A --> G[Open in Gmail]
+    A --> M[Send with n8n]
+```
 
-1️⃣ Clone the repo
+This is a small **RAG** (retrieval-augmented generation) pipeline: instead of giving the model your whole resume, it first **retrieves** the few lines that match the job, then **generates** the email from those lines.
+
+1. **Split.** The resume is broken into sentences and bullet points. Long ones are cut into overlapping pieces of up to 45 words.
+2. **Embed.** Each piece becomes an embedding (a list of 384 numbers that captures its meaning) using `all-MiniLM-L6-v2`.
+3. **Search.** The job description is embedded the same way and compared against your resume pieces. Pieces are stored in **Pinecone** if you set it up; otherwise the search runs in memory.
+4. **Re-rank.** The top 20 results are scored again by a **cross-encoder** (`ms-marco-MiniLM-L-6-v2`), which reads the job description and each piece together. This is slower than embeddings but more accurate, so it's only used on the shortlist.
+5. **Write.** OpenAI gets the job details, the top 5 resume lines and the top of your resume (for your name), and returns a subject line and email body as JSON.
+
+---
+
+## Tech stack
+
+| Part | Tool |
+| --- | --- |
+| Web app | [Gradio 6](https://www.gradio.app/) with a custom theme (light and dark mode) |
+| Reading PDFs | [pypdf](https://pypdf.readthedocs.io/) |
+| Embeddings | [sentence-transformers](https://www.sbert.net/) `all-MiniLM-L6-v2` |
+| Re-ranking | sentence-transformers cross-encoder `ms-marco-MiniLM-L-6-v2` |
+| Vector database | [Pinecone](https://www.pinecone.io/) (optional) |
+| Writing | [OpenAI API](https://platform.openai.com/) (`gpt-4.1-mini` by default) |
+| Finding emails | [Hunter.io](https://hunter.io/) (optional) |
+| Sending | Gmail compose link, or an [n8n](https://n8n.io/) webhook (optional) |
+| Tests | pytest |
+
+---
+
+## Getting started
+
+You need **Python 3.10 or newer** and an **OpenAI API key**. Everything else is optional.
+
+**1. Clone the repo**
+
+```bash
+git clone https://github.com/rajatsxngh/cold-email-copilot.git
+cd cold-email-copilot
 ```
-git clone https://github.com/<your-username>/cold_mail_copilot.git
-cd cold_mail_copilot
-```
-2️⃣ Create & activate a virtual environment
-```
-python3 -m venv venv
-source venv/bin/activate    # macOS / Linux
-# .\venv\Scripts\activate   # Windows PowerShell
-```
-3️⃣ Install dependencies
-```
+
+**2. Create a virtual environment and install the packages**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4️⃣ Create a .env file
-Create a file named .env in the project root with your keys and config.
-Adjust names if your config.py expects different ones.
-Example:
+**3. Add your keys**
+
+```bash
+cp .env.example .env
 ```
-# OpenAI
-OPENAI_API_KEY=your_openai_key_here
 
-# Pinecone
-PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_INDEX_NAME=cold-email-resumes
-PINECONE_CLOUD=aws
-PINECONE_REGION=us-east-1
+Open `.env` and fill in at least `OPENAI_API_KEY`. See [Settings](#settings) for the rest.
 
-# Hunter.io
-HUNTER_API_KEY=your_hunter_api_key_here
+**4. Run the app**
 
-# n8n webhook (for "Send via n8n" button)
-N8N_WEBHOOK_URL=http://localhost:5678/webhook/cold-email
-```
-⚠️ Never commit .env – it’s already ignored by .gitignore.
-
-5️⃣ Run the Gradio app
-```
+```bash
 python -m src.app_gradio
 ```
-You should see something like:
-```
-Running on local URL:  http://127.0.0.1:7860
-```
-Open that URL in your browser.
+
+Open the link it prints (usually http://127.0.0.1:7860).
+
+> The first time you click **Write my email**, the two small Hugging Face models (about 90 MB each) are downloaded. After that, they load from your computer.
 
 ---
 
+## Settings
 
-## 🔁 Optional: n8n Workflow (Send via Gmail + Log)
+All settings go in the `.env` file. The colored pills at the top of the app show which services are set up.
 
-If you want the “Send via n8n” button to actually send emails:
+| Setting | Needed? | What it's for | If you leave it empty |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | **Yes** | Reads the job description and writes the email | The app can't write emails |
+| `OPENAI_MODEL` | No | Which OpenAI model to use | Uses `gpt-4.1-mini` |
+| `PINECONE_API_KEY` | No | Stores your resume pieces in Pinecone | Search runs in memory (works the same for one resume) |
+| `PINECONE_INDEX_NAME` | No | Name of the Pinecone index (created for you if missing) | `cold-email-copilot` |
+| `PINECONE_CLOUD`, `PINECONE_REGION` | No | Where Pinecone creates the index | `aws`, `us-east-1` |
+| `HUNTER_API_KEY` | No | Finds the recruiter's email | You type the email yourself |
+| `N8N_WEBHOOK_URL` | No | Sends the email through your n8n workflow | Use **Open in Gmail** instead |
 
-1️⃣ Start n8n
+> Never commit your `.env` file. It's already listed in `.gitignore`.
+
+---
+
+## Optional: send emails with n8n
+
+**Open in Gmail** works without any setup. If you'd rather send straight from the app (and keep a log), connect an n8n workflow:
+
+1. Start n8n (`npx n8n`) and open it, usually at http://localhost:5678.
+2. Add a **Webhook** node: method `POST`, path `cold-email`. This gives you a URL like `http://localhost:5678/webhook/cold-email`. Put it in `.env` as `N8N_WEBHOOK_URL`.
+3. Add a **Gmail** node after it, signed in with your Google account, and map the fields:
+   - To → `{{ $json.body.to }}`
+   - Subject → `{{ $json.body.subject }}`
+   - Message → `{{ $json.body.body }}`
+4. *(Optional)* Add a **Google Sheets** node to log `to`, `subject`, `job_title`, `company` and the time.
+5. Turn the workflow on.
+
+When you click **Send with n8n**, the app posts this JSON to the webhook:
+
+```json
+{
+  "to": "recruiter@company.com",
+  "subject": "…",
+  "body": "…",
+  "job_title": "Data Analyst",
+  "company": "Northwind Logistics",
+  "jd_url": ""
+}
 ```
-npx n8n
+
+> Depending on your n8n version, the posted fields may sit under `$json.body` or directly under `$json`. Check the Webhook node's output and adjust the mappings if needed.
+
+---
+
+## Running the tests
+
+The tests replace OpenAI, Pinecone, Hunter, n8n and the Hugging Face models with small fakes, so they run **offline, in a few seconds, with no API keys**.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
 ```
-Open the n8n UI (usually at http://localhost:5678).
 
-2️⃣ Create the workflow
-#### 1.	Webhook node
-	•	Method: POST
-	•	Path: cold-email
-	•	This gives you a URL like: http://localhost:5678/webhook/cold-email
-	•	Make sure this matches N8N_WEBHOOK_URL in your .env.
-	
-####  2.	Gmail node
-	•	Connect it after the Webhook node.
-	•	Map fields from the webhook JSON:
-	•	To ← {{$json["to"]}}
-	•	Subject ← {{$json["subject"]}}
-	•	Body ← {{$json["body"]}}
-	•	Use your Gmail OAuth credential inside n8n.
-#### 	3.	(Optional) Logging node (e.g., Google Sheets / DB)
-	•	Insert between or after nodes to log:
-	•	to, subject, job_title, company, jd_url, timestamp
-####	4.	Activate the workflow (toggle at top right).
+They cover resume splitting, search and re-ranking (including Pinecone fallbacks), reading the model's replies, the Hunter lookup, input checks, the Gmail link and the n8n payload.
 
-#### Now, when you click “Send via n8n” in the app:
-	•	The app posts {to, subject, body, job_title, company, jd_url} to the webhook.
-	•	n8n sends the email via Gmail.
-	•	(Optional) n8n logs it to your chosen storage.
+---
 
-  ---
-  ## ⚠️ Disclaimer
+## Project structure
 
-This is a personal learning project focused on:
-	•	RAG-style retrieval with reranking
-	•	Practical automation (n8n + Gmail)
-	•	Realistic job-search use case
+```text
+cold-email-copilot/
+├─ src/
+│  ├─ app_gradio.py        # the web app: layout, theme and button actions
+│  ├─ pipeline.py          # the main flow, from resume + job description to email
+│  ├─ embeddings_index.py  # splitting the resume, embeddings, Pinecone search, re-ranking
+│  ├─ openai_email.py      # reading the job description and writing the email
+│  ├─ hunter_client.py     # finding the recruiter's email with Hunter.io
+│  ├─ n8n_client.py        # sending the email through an n8n webhook
+│  ├─ pdf_utils.py         # reading text from the resume PDF
+│  └─ config.py            # settings from .env and API clients
+├─ tests/                  # offline tests with fake services
+├─ docs/                   # screenshots for this README
+├─ .env.example            # template for your .env file
+├─ requirements.txt
+├─ requirements-dev.txt    # adds pytest
+└─ README.md
+```
 
-Always review and edit each email before sending and respect company / recruiter communication norms and privacy policies.
+---
 
+## Design choices
+
+- **No guessing on emails.** If Hunter can't find the recruiter, the app says so and leaves the field empty. It never falls back to someone else's address at the company.
+- **Only real experience.** The writing prompt tells the model to use only what's in your resume: no made-up numbers, employers or degrees.
+- **Your resume stays private.** It's read from Gradio's temporary upload and never copied into the project folder. With Pinecone on, only your current resume is kept: the old one is cleared each time.
+- **Works with less.** Only OpenAI is required. Pinecone, Hunter and n8n each add something, but the app runs fine without them.
+- **Reliable replies.** Both OpenAI calls ask for JSON and the replies are checked, so a reply wrapped in a code block or missing a field doesn't break the app.
+- **Matches you can read.** The resume is split by sentence and bullet point, so "How you match" shows real lines from your resume, not random blocks of text.
+
+---
+
+## Limitations and ideas
+
+- **Scanned resumes** (image-only PDFs) have no text to read. Export your resume as a text PDF.
+- **One user at a time.** Everything is stored under one user ID, which is fine for running it on your own computer.
+- **Ideas:** paste a job URL instead of the text, keep a history of sent emails, write follow-up emails, and offer a few tone options (formal, friendly, short).
+
+---
+
+**Always read the email before you send it**, and respect each company's and recruiter's communication preferences.

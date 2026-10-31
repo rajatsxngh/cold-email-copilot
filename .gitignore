@@ -1,6 +1,12 @@
 # never upload secrets
 .env
 .env*
+!.env.example
+
+# never upload resumes or other personal files
+uploads/
+*.pdf
+!docs/*.pdf
 
 # never upload virtual env
 venv/
@@ -9,6 +15,8 @@ venv/
 # python junk
 __pycache__/
 *.pyc
+.pytest_cache/
+.gradio/
 
 # mac junk
 .DS_Store

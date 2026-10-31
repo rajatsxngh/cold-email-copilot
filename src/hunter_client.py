@@ -1,102 +1,109 @@
-import os
+# src/hunter_client.py
+"""Look up a recruiter's work email with Hunter.io.
+
+1. Try Hunter's Email Finder with the recruiter's name and company domain.
+2. If that finds nothing, search every email Hunter knows for the domain and
+   look for an exact name match.
+
+It never guesses: if the recruiter isn't found, it returns no email rather
+than someone else's address at the same company.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+
 import requests
 
-HUNTER_API_KEY = os.environ.get("HUNTER_API_KEY", "").strip()
+from . import config
+
+log = logging.getLogger(__name__)
+
 HUNTER_BASE_URL = "https://api.hunter.io/v2"
+TIMEOUT_SECONDS = 10
 
 
-def _split_name(full_name: str):
-    """Split 'John Dennis' -> ('John', 'Dennis')."""
-    parts = full_name.strip().split()
-    if len(parts) == 0:
+@dataclass
+class RecruiterEmail:
+    email: str | None
+    source: str = ""  # which Hunter endpoint found it
+    confidence: int | None = None  # Hunter's 0-100 confidence score
+    message: str = ""  # short note shown in the app
+
+
+def clean_domain(value: str) -> str:
+    """Turn 'https://www.acme.com/careers' into 'acme.com'."""
+    value = value.strip().lower()
+    value = re.sub(r"^[a-z]+://", "", value)
+    value = value.split("/")[0].split("?")[0]
+    return value.removeprefix("www.")
+
+
+def _split_name(full_name: str) -> tuple[str, str]:
+    """Split 'John Dennis' into ('John', 'Dennis')."""
+    parts = full_name.split()
+    if not parts:
         return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
     return parts[0], " ".join(parts[1:])
 
 
-def find_recruiter_email(full_name: str, domain: str) -> str | None:
-    """Try to find an email using Hunter.
+def _same_name(a: str, b: str) -> bool:
+    return " ".join(a.casefold().split()) == " ".join(b.casefold().split())
 
-    1) First call Email Finder (recommended by Hunter).
-    2) If nothing comes back, fall back to Domain Search and try to
-       match the name there.
-    """
 
-    if not HUNTER_API_KEY:
-        print("[Hunter] No API key configured – returning None")
-        return None
+def _error_text(resp: requests.Response) -> str:
+    try:
+        errors = resp.json().get("errors") or []
+        return errors[0].get("details", "") if errors else ""
+    except ValueError:
+        return ""
 
+
+def find_recruiter_email(full_name: str, domain: str) -> RecruiterEmail:
+    if not config.HUNTER_API_KEY:
+        return RecruiterEmail(None, message="Hunter isn't set up. Type the email yourself.")
+
+    full_name = (full_name or "").strip()
+    domain = clean_domain(domain or "")
     if not full_name or not domain:
-        print("[Hunter] Missing name or domain – returning None")
-        return None
+        return RecruiterEmail(None, message="Add the recruiter's name and company domain to look up their email.")
 
-    domain = domain.strip().lower()
-    full_name = full_name.strip()
     first, last = _split_name(full_name)
-
-    # -----------------------------
-    # 1) Try Email Finder endpoint
-    # -----------------------------
-    params = {
-        "domain": domain,
-        "api_key": HUNTER_API_KEY,
-    }
-
-    # Hunter allows either (first_name + last_name) OR full_name
-    if first and last:
-        params["first_name"] = first
-        params["last_name"] = last
+    params = {"domain": domain, "api_key": config.HUNTER_API_KEY}
+    if last:
+        params.update(first_name=first, last_name=last)
     else:
         params["full_name"] = full_name
 
+    # 1) Email Finder
     try:
-        resp = requests.get(f"{HUNTER_BASE_URL}/email-finder", params=params, timeout=10)
-        print("[Hunter] Email Finder status:", resp.status_code)
-        data = resp.json()
-        print("[Hunter] Email Finder response (short):",
-              {k: data.get(k) for k in ["data", "errors"] if k in data})
-
+        resp = requests.get(f"{HUNTER_BASE_URL}/email-finder", params=params, timeout=TIMEOUT_SECONDS)
         if resp.status_code == 200:
-            email = data.get("data", {}).get("email")
-            if email:
-                return email
-    except Exception as e:
-        print("[Hunter] Email Finder error:", e)
+            data = resp.json().get("data") or {}
+            if data.get("email"):
+                return RecruiterEmail(data["email"], "Email Finder", data.get("score"), "Found by Hunter Email Finder.")
+        elif resp.status_code in (401, 403, 429):
+            # bad key, no access, or out of credits: the next call would fail the same way
+            return RecruiterEmail(None, message=f"Hunter error {resp.status_code}: {_error_text(resp) or resp.reason}")
+        else:
+            log.info("Hunter Email Finder returned %s", resp.status_code)
+    except requests.RequestException as exc:
+        log.warning("Hunter Email Finder failed: %s", exc)
 
-    # --------------------------------
-    # 2) Fallback: Domain Search
-    # --------------------------------
+    # 2) Domain Search, exact name match only
     try:
-        ds_params = {
-            "domain": domain,
-            "api_key": HUNTER_API_KEY,
-        }
-        resp = requests.get(f"{HUNTER_BASE_URL}/domain-search", params=ds_params, timeout=10)
-        print("[Hunter] Domain Search status:", resp.status_code)
-        data = resp.json()
-        print("[Hunter] Domain Search keys:", list(data.keys()))
+        resp = requests.get(
+            f"{HUNTER_BASE_URL}/domain-search",
+            params={"domain": domain, "api_key": config.HUNTER_API_KEY},
+            timeout=TIMEOUT_SECONDS,
+        )
+        if resp.status_code == 200:
+            for entry in (resp.json().get("data") or {}).get("emails", []):
+                name = f"{entry.get('first_name') or ''} {entry.get('last_name') or ''}"
+                if _same_name(name, full_name) and entry.get("value"):
+                    return RecruiterEmail(entry["value"], "Domain Search", entry.get("confidence"), "Found by Hunter Domain Search.")
+    except requests.RequestException as exc:
+        log.warning("Hunter Domain Search failed: %s", exc)
 
-        if resp.status_code != 200:
-            return None
-
-        emails = data.get("data", {}).get("emails", [])
-        if not emails:
-            return None
-
-        # Try to match the name exactly
-        target = full_name.lower()
-        for e in emails:
-            fn = (e.get("first_name") or "").strip()
-            ln = (e.get("last_name") or "").strip()
-            combined = (fn + " " + ln).strip().lower()
-            if combined == target:
-                return e.get("value")
-
-        # If no exact match, just return the first email as a fallback
-        return emails[0].get("value")
-
-    except Exception as e:
-        print("[Hunter] Domain Search error:", e)
-
-    return None
+    return RecruiterEmail(None, message=f"Hunter couldn't find {full_name} at {domain}. Type the email yourself.")
